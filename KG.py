@@ -20,6 +20,7 @@ from zep_cloud.client import AsyncZep
 import uuid
 from zep_cloud.types import Message
 import openai
+from memory_tool import MemoryTool, MemoryQuery, Memory
 
 
 #load the environment variables first: 
@@ -181,11 +182,26 @@ You are a helpful assistant. Carefully review the facts about the user below and
         print("Assistant:", response.choices[0].message.content)
 
 
+async def use_memory_tool(client):
+    # Initialize the tool
+    memory_tool = MemoryTool(client)
+
+    # When you need context
+    query = MemoryQuery(query="user's question here")
+    memories = await memory_tool.search_memories(query)
+
+    # When you want to store new information
+    new_memory = Memory(
+        content="Important conversation point",
+        metadata={"context": "user_interaction"}
+    )
+    await memory_tool.add_memory(new_memory)
+
+
 async def main():
     """
     main function to run the code. 
     """
-
     client,user_id,session_id = user_intialization_process()
     #now getting the scraped text, 
     pdf_file = "366_assg.pdf"
@@ -193,6 +209,9 @@ async def main():
     scraped_text = scrape_text_from_pdf(pdf_file)
     page_number,page_values = get_unique_group_id(scraped_text)
     add_to_knowledge_graph(user_id, client, page_number, page_values, pdf_file)
+
+    # Use memory tool
+    await use_memory_tool(client)
 
     #now we run the chatbot. 
     await chatbot_loop(client, user_id, session_id)
@@ -202,3 +221,20 @@ async def main():
 #this would be a good way to go about it. 
 #we can use the page number to seperate the knowledge graphs.  like a UNIQUE SEPERATION IDENTIFIER LOCALIZED FOR EACH PAGE. 
 # A HASH MAP AI AGENT TO RETREIVE AND SUMMARIZE THE EMBEDDINGS WHEN NEEDED AND CALLED WITHIN THAT PAGE ?    
+
+    # Initialize the tool
+    memory_tool = MemoryTool(client)
+
+    # When you need context
+    query = MemoryQuery(query="user's question here")
+    memories = await memory_tool.search_memories(query)
+
+    # When you want to store new information
+    new_memory = Memory(
+        content="Important conversation point",
+        metadata={"context": "user_interaction"}
+    )
+    await memory_tool.add_memory(new_memory)    
+
+if __name__ == "__main__":
+    asyncio.run(main())
