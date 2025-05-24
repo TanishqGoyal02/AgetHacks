@@ -1,0 +1,6 @@
+pdfplumber==0.10.3
+python-dotenv==1.0.0
+pydantic>=2.10.0
+pydantic-ai==0.1.0
+zep-cloud==2.12.3
+uuid==1.30 
