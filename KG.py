@@ -89,7 +89,7 @@ def user_intialization_process():
     print(f"Creating a new user with id {user_id}")
 
     #respectively intiate the new user in zep.
-    new_user = client.user.add(
+    client.user.add(
         user_id=user_id,
     )
 
@@ -100,6 +100,16 @@ def user_intialization_process():
     client.memory.add_session(
         session_id=session_id,
         user_id=user_id,
+    )
+
+    client.memory.add(
+        session_id=session_id,
+        messages=[Message(role_type="system", role="system", content="The user uploaded a PDF: 366_assg.pdf")]
+    )
+
+    client.memory.add(
+        session_id=session_id,
+        messages=[Message(role_type="system", role="system", content="The user's health data for 2024-06-01 has been added.")]
     )
 
     return client,user_id,session_id
@@ -134,26 +144,39 @@ def get_unique_group_id(scraped_text):
 
 
 #when building the knowledge graph . document id can be inferred from main and group id can be inferred from the get_unique_group_id function.
-def add_to_knowledge_graph(user_id, client, page_numbers, page_texts, document_name):
+def add_to_knowledge_graph(client, page_texts, document_name):
     """
     Adds the raw text of each page to the knowledge graph, using group_id for each page.
     """
-    for page_number, page_text in zip(page_numbers, page_texts):
-        if not page_text:
-            continue  # Skip empty pages
-        group_id = f"{document_name}_{page_number}"
-        new_episode = client.graph.add(
-            group_id=group_id,
-            #user_id=user_id,
-            type="text",
-            data=page_text
-        )
-        print(f"Added page {page_number} to graph as group {group_id}")
-        print(f"Added episode: {new_episode}")
+    combined_texts = [page_text for page_text in page_texts if page_text]
+    if not combined_texts:
+        print("No non-empty pages to add to the knowledge graph.")
+        return
+    combined_text = "\n\n".join(combined_texts)
+    group_id = f"{document_name}_all_pages"
+    new_episode = client.graph.add(
+        group_id=group_id,
+        type="text",
+        data=combined_text
+    )
+    print(f"Added all pages to graph as group {group_id}")
+    print(f"Added episode: {new_episode}")
     print("Knowledge graph built successfully.")
 
 
-async def chatbot_loop(client, user_id, session_id):
+def add_health_data_to_kg(client, health_data):
+    group_id = f"health_{health_data['user_id']}_{health_data['date']}"
+    data = json.dumps(health_data)
+    result = client.graph.add(
+        group_id=group_id,
+        type="json",
+        data=data
+    )
+    print(f"Added health data to graph as group {group_id}")
+    print(f"Added episode: {result}")
+
+
+async def chatbot_loop(client, user_id, session_id, pdf_context, health_context):
     print("\n--- Chatbot (type 'exit' to quit) ---\n")
     oai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
     user_name = user_id
@@ -167,14 +190,13 @@ async def chatbot_loop(client, user_id, session_id):
             session_id=session_id,
             messages=[Message(role_type="user", role=user_name, content=user_message)],
         )
-        # Retrieve memory context
+        # Retrieve the latest memory context (this includes KG facts/entities)
         memory = client.memory.get(session_id=session_id)
-        system_message = """
-You are a helpful assistant. Carefully review the facts about the user below and respond to the user's question. Be helpful and friendly.
-"""
+        context = getattr(memory, "context", "")
+        system_message = f"""
+        You are a helpful assistant.\n\nHere is the content of the user's PDF:\n{pdf_context}\n\nHere is the user's health data:\n{health_context}\n\nHere is the user's session memory context:\n{context}\n\nCarefully review the facts about the user below and respond to the user's question. Be helpful and friendly.\n"""
         messages = [
             {"role": "system", "content": system_message},
-            {"role": "assistant", "content": memory.context},
             {"role": "user", "content": user_message},
         ]
         response = oai_client.chat.completions.create(
@@ -191,7 +213,7 @@ async def use_memory_tool(client, user_id):
 
     # When you need context
     query = MemoryQuery(query="user's question here")
-    results = memory_tool.search_memories(query, user_id=user_id)
+    results = memory_tool.search_memories(query)
 
     # When you want to store new information
     new_memory = Memory(
@@ -200,51 +222,40 @@ async def use_memory_tool(client, user_id):
     )
     memory_tool.add_memory(new_memory)
 
+def get_pdf_kg_content(client, document_name):
+    group_id = f"{document_name}_all_pages"
+    search_results = client.graph.search(query="*", group_id=group_id, limit=1)
+    results = getattr(search_results, 'results', [])
+    if results:
+        return getattr(results[0], 'text', '')
+    return ""
 
-async def main():
-    """
-    main function to run the code. 
-    """
-    client,user_id,session_id = user_intialization_process()
-    #now getting the scraped text, 
+def get_health_kg_content(client, user_id, date):
+    group_id = f"health_{user_id}_{date}"
+    search_results = client.graph.search(query="*", group_id=group_id, limit=1)
+    results = getattr(search_results, 'results', [])
+    if results:
+        return getattr(results[0], 'text', '')  # or 'data' if the SDK returns the JSON as 'data'
+    return ""
+
+
+def main():
+    client, user_id, session_id = user_intialization_process()
     pdf_file = "366_assg.pdf"
-    #key_points = await get_key_points_from_pdf(pdf_file)
     scraped_text = scrape_text_from_pdf(pdf_file)
-    page_number,page_values = get_unique_group_id(scraped_text)
-    add_to_knowledge_graph(user_id, client, page_number, page_values, pdf_file)
-
-    # Use memory tool
-    await use_memory_tool(client, user_id)
-
-    # Load and add health data to KG
+    page_values = list(scraped_text.values())
+    add_to_knowledge_graph(client, page_values, pdf_file)
     with open("mock_health_data.json", "r") as f:
         health_json = json.load(f)
-    health_data = HealthData(**health_json)
-    health_tool = HealthDataTool(client)
-    health_tool.add_health_data_to_kg(health_data)
+    add_health_data_to_kg(client, health_json)
+    # Retrieve KG data for prompt injection
+    pdf_context = get_pdf_kg_content(client, pdf_file)
+    health_context = get_health_kg_content(client, health_json['user_id'], health_json['date'])
+    # Start chatbot loop with injected context
+    asyncio.run(chatbot_loop(client, user_id, session_id, pdf_context, health_context))
 
-    #now we run the chatbot. 
-    await chatbot_loop(client, user_id, session_id)
 
 
-#what if we could seperate different knowledge graphs for different pages of a pdf document ? 
-#this would be a good way to go about it. 
-#we can use the page number to seperate the knowledge graphs.  like a UNIQUE SEPERATION IDENTIFIER LOCALIZED FOR EACH PAGE. 
-# A HASH MAP AI AGENT TO RETREIVE AND SUMMARIZE THE EMBEDDINGS WHEN NEEDED AND CALLED WITHIN THAT PAGE ?    
-
-    # Initialize the tool
-    memory_tool = MemoryTool(client)
-
-    # When you need context
-    query = MemoryQuery(query="user's question here")
-    results = await memory_tool.search_memories(query)
-
-    # When you want to store new information
-    new_memory = Memory(
-        content="Important conversation point",
-        metadata={"context": "user_interaction"}
-    )
-    await memory_tool.add_memory(new_memory)    
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
