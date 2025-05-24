@@ -1,6 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from zep_cloud import ZepClient
+from zep_cloud.client import Zep, AsyncZep
 from datetime import datetime
 
 class MemoryQuery(BaseModel):
@@ -16,65 +16,57 @@ class Memory(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="When the memory was created")
 
 class MemoryTool:
-    """Tool for accessing and querying the memory layer"""
+    """Tool for accessing and querying the memory layer (low-level KG search)"""
     
-    def __init__(self, zep_client: ZepClient):
+    def __init__(self, zep_client):  # Accept either Zep or AsyncZep
         self.client = zep_client
     
-    async def search_memories(self, query: MemoryQuery) -> List[Memory]:
-        """Search for relevant memories based on the query"""
+    def search_memories(self, query: MemoryQuery, user_id: str = None, group_id: str = None) -> List[Memory]:
+        """Search for relevant memories based on the query using the knowledge graph (low-level)."""
         try:
-            # Search the memory collection
-            results = await self.client.search(
-                collection_name=query.collection_name,
-                query=query.query,
-                limit=query.limit
-            )
-            
+            # Use the graph search method, require user_id or group_id
+            search_kwargs = {
+                'query': query.query,
+                'limit': query.limit
+            }
+            if user_id:
+                search_kwargs['user_id'] = user_id
+            if group_id:
+                search_kwargs['group_id'] = group_id
+            results = self.client.graph.search(**search_kwargs)
             # Convert results to Memory objects
             memories = []
             for result in results:
                 memory = Memory(
-                    content=result.text,
-                    metadata=result.metadata,
-                    timestamp=result.created_at
+                    content=getattr(result, 'text', ''),
+                    metadata=getattr(result, 'metadata', {}),
+                    timestamp=getattr(result, 'created_at', datetime.now())
                 )
                 memories.append(memory)
-            
             return memories
         except Exception as e:
             raise Exception(f"Error searching memories: {str(e)}")
     
-    async def add_memory(self, memory: Memory, collection_name: str = "default") -> str:
-        """Add a new memory to the collection"""
+    def add_memory(self, memory: Memory, collection_name: str = "default") -> str:
+        """Add a new memory to the collection (low-level KG add)."""
         try:
             # Add the memory to the collection
-            result = await self.client.add(
-                collection_name=collection_name,
-                text=memory.content,
-                metadata=memory.metadata
+            result = self.client.graph.add(
+                group_id=collection_name,
+                type="text",
+                data=memory.content
             )
-            return result.id
+            return getattr(result, 'id', None)
         except Exception as e:
             raise Exception(f"Error adding memory: {str(e)}")
 
 # Example usage:
 """
 async def main():
-    # Initialize the Zep client
-    client = ZepClient(api_key="your-api-key")
-    
-    # Create the memory tool
+    client = Zep(api_key="your-api-key")
     memory_tool = MemoryTool(client)
-    
-    # Search for memories
-    query = MemoryQuery(
-        query="What was discussed about project X?",
-        limit=3
-    )
+    query = MemoryQuery(query="What was discussed about project X?", limit=3)
     memories = await memory_tool.search_memories(query)
-    
-    # Add a new memory
     new_memory = Memory(
         content="Discussed project timeline and deliverables",
         metadata={"project": "X", "topic": "timeline"}

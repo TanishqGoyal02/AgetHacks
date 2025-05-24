@@ -21,6 +21,8 @@ import uuid
 from zep_cloud.types import Message
 import openai
 from memory_tool import MemoryTool, MemoryQuery, Memory
+import json
+from health_data_tool import HealthData, HealthDataTool
 
 
 #load the environment variables first: 
@@ -82,7 +84,8 @@ def user_intialization_process():
     #intialising the Zep connection object 
     client = Zep(api_key=API_KEY)
 
-    user_id = get_next_user_id()
+    # Always generate a unique user_id and session_id
+    user_id = f"user_{uuid.uuid4().hex}"
     print(f"Creating a new user with id {user_id}")
 
     #respectively intiate the new user in zep.
@@ -182,20 +185,20 @@ You are a helpful assistant. Carefully review the facts about the user below and
         print("Assistant:", response.choices[0].message.content)
 
 
-async def use_memory_tool(client):
+async def use_memory_tool(client, user_id):
     # Initialize the tool
     memory_tool = MemoryTool(client)
 
     # When you need context
     query = MemoryQuery(query="user's question here")
-    memories = await memory_tool.search_memories(query)
+    results = memory_tool.search_memories(query, user_id=user_id)
 
     # When you want to store new information
     new_memory = Memory(
         content="Important conversation point",
         metadata={"context": "user_interaction"}
     )
-    await memory_tool.add_memory(new_memory)
+    memory_tool.add_memory(new_memory)
 
 
 async def main():
@@ -211,7 +214,14 @@ async def main():
     add_to_knowledge_graph(user_id, client, page_number, page_values, pdf_file)
 
     # Use memory tool
-    await use_memory_tool(client)
+    await use_memory_tool(client, user_id)
+
+    # Load and add health data to KG
+    with open("mock_health_data.json", "r") as f:
+        health_json = json.load(f)
+    health_data = HealthData(**health_json)
+    health_tool = HealthDataTool(client)
+    health_tool.add_health_data_to_kg(health_data)
 
     #now we run the chatbot. 
     await chatbot_loop(client, user_id, session_id)
@@ -227,7 +237,7 @@ async def main():
 
     # When you need context
     query = MemoryQuery(query="user's question here")
-    memories = await memory_tool.search_memories(query)
+    results = await memory_tool.search_memories(query)
 
     # When you want to store new information
     new_memory = Memory(
